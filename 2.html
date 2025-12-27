@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Robux Kids — Encuestas</title>
+    <title>Robux Kids — Demo (Con registro)</title>
     <style>
       /* Mobile-first, temática infantil */
       @import url("https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;700&display=swap");
@@ -288,6 +288,18 @@
         color: #334155;
         padding-bottom: 24px;
       }
+
+      /* small helper styles for messages */
+      .msg {
+        margin-top: 8px;
+        font-size: 13px;
+      }
+      .msg.ok {
+        color: #065f46;
+      }
+      .msg.err {
+        color: #991b1b;
+      }
     </style>
   </head>
   <body>
@@ -310,7 +322,7 @@
               alt="avatar demo"
             />
           </div>
-          <button class="btn" id="openLogin">Entrar (DEMO)</button>
+          <button class="btn" id="openLogin">Entrar / Registrar</button>
         </div>
       </header>
 
@@ -340,14 +352,14 @@
 
         <footer>
           <div>
-            Demo educativo — No se recopilan contraseñas. Datos guardados en tu
-            dispositivo.
+            Demo educativo — No se recopilan contraseñas de otras plataformas.
+            Las cuentas creadas aquí son solo para esta demo.
           </div>
         </footer>
       </main>
     </div>
 
-    <!-- Modal login DEMO -->
+    <!-- Modal login/registro DEMO -->
     <div id="modalLogin" class="modal" style="display: none" aria-hidden="true">
       <div
         class="modal-card"
@@ -355,10 +367,11 @@
         aria-modal="true"
         aria-label="Inicio de sesión demo"
       >
-        <h3 style="margin-top: 0">Inicio de sesión DEMO</h3>
+        <h3 style="margin-top: 0">Entrar o Registrar (Cuenta local DEMO)</h3>
         <p class="hint">
-          Introduce solo tu nombre de usuario de Roblox (sin contraseña). El
-          sistema intentará obtener la imagen pública de tu avatar.
+          Crea una cuenta para esta demo. No uses contraseñas de otros
+          servicios. También puedes buscar la imagen pública de tu avatar de
+          Roblox.
         </p>
 
         <div style="margin-top: 10px">
@@ -377,21 +390,39 @@
                 border: 1px solid #e6e6e6;
               "
             />
-            <button id="btnFetch" class="ghost">Buscar</button>
+            <button id="btnFetch" class="ghost">Buscar avatar</button>
           </div>
-          <p id="fetchMsg" class="hint" style="display: none"></p>
-        </div>
 
-        <div
-          style="
-            display: flex;
-            gap: 8px;
-            justify-content: flex-end;
-            margin-top: 12px;
-          "
-        >
-          <button id="closeModal" class="ghost">Cerrar</button>
-          <button id="saveDemo" class="btn">Guardar (DEMO)</button>
+          <label for="passwordInput" style="font-weight: 700; margin-top: 10px"
+            >Contraseña (solo para esta demo)</label
+          >
+          <input
+            id="passwordInput"
+            type="password"
+            placeholder="mínimo 6 caracteres"
+          />
+
+          <p id="fetchMsg" class="hint" style="display: none"></p>
+          <div
+            style="
+              display: flex;
+              gap: 8px;
+              justify-content: flex-end;
+              margin-top: 12px;
+            "
+          >
+            <button id="closeModal" class="ghost">Cerrar</button>
+            <button id="btnRegister" class="btn">Registrar</button>
+            <button
+              id="btnLogin"
+              class="btn"
+              style="background: linear-gradient(90deg, #06b6d4, #3b82f6)"
+            >
+              Entrar
+            </button>
+          </div>
+
+          <div id="authMsg" class="msg" style="display: none"></div>
         </div>
       </div>
     </div>
@@ -519,14 +550,17 @@
         }
       }
 
-      // Demo login modal handlers & Roblox avatar fetch
+      // Demo login modal handlers & avatar fetch (server-first, fallback to client)
       const modal = document.getElementById("modalLogin");
       const openLogin = document.getElementById("openLogin");
       const closeModal = document.getElementById("closeModal");
       const btnFetch = document.getElementById("btnFetch");
-      const btnSave = document.getElementById("saveDemo");
+      const btnRegister = document.getElementById("btnRegister");
+      const btnLogin = document.getElementById("btnLogin");
       const usernameInput = document.getElementById("usernameInput");
+      const passwordInput = document.getElementById("passwordInput");
       const fetchMsg = document.getElementById("fetchMsg");
+      const authMsg = document.getElementById("authMsg");
       const imgAvatar = document.getElementById("imgAvatar");
       const headerAvatar = document.getElementById("headerAvatar");
 
@@ -534,54 +568,85 @@
         modal.style.display = "flex";
         modal.setAttribute("aria-hidden", "false");
         fetchMsg.style.display = "none";
+        authMsg.style.display = "none";
         usernameInput.value = "";
+        passwordInput.value = "";
       });
       closeModal.addEventListener("click", () => {
         modal.style.display = "none";
         modal.setAttribute("aria-hidden", "true");
       });
 
-      // Try to fetch Roblox avatar by username (DEMO - public endpoints)
-      async function fetchRobloxAvatar(username) {
-        if (!username) return null;
+      function showAuthMsg(text, ok = true) {
+        authMsg.style.display = "block";
+        authMsg.textContent = text;
+        authMsg.className = "msg " + (ok ? "ok" : "err");
+      }
+
+      // Try server-side avatar endpoint first to avoid CORS issues.
+      async function getAvatarViaServer(username) {
         try {
-          fetchMsg.style.display = "block";
-          fetchMsg.textContent = "Buscando usuario...";
-          // Step 1: get user id
-          const res = await fetch(
+          const r = await fetch(`/api/avatar/${encodeURIComponent(username)}`);
+          if (!r.ok) throw new Error("Server avatar fetch failed");
+          const j = await r.json();
+          if (j && j.imageUrl) return j.imageUrl;
+          return null;
+        } catch (e) {
+          // server not available or failed
+          return null;
+        }
+      }
+
+      // Fallback: client-side direct Roblox requests (may be blocked by CORS)
+      async function getAvatarViaClientRoblox(username) {
+        try {
+          // get user id
+          const r = await fetch(
             `https://api.roblox.com/users/get-by-username?username=${encodeURIComponent(
               username
             )}`,
             { mode: "cors" }
           );
-          if (!res.ok) throw new Error("Error al consultar Roblox");
-          const data = await res.json();
-          if (data && data.Id) {
-            const uid = data.Id;
-            fetchMsg.textContent = "Obteniendo imagen del avatar…";
-            // Step 2: get avatar thumbnail
-            const thumbRes = await fetch(
-              `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${uid}&size=150x150&format=Png&isCircular=false`,
-              { mode: "cors" }
-            );
-            if (!thumbRes.ok)
-              throw new Error("No se pudo obtener la miniatura");
-            const j = await thumbRes.json();
-            if (j && j.data && j.data[0] && j.data[0].imageUrl) {
-              fetchMsg.textContent = "¡Avatar encontrado!";
-              return j.data[0].imageUrl;
-            }
-          } else {
-            fetchMsg.textContent = "Usuario no encontrado en Roblox.";
-            return null;
-          }
+          if (!r.ok) throw new Error("Roblox user fetch failed");
+          const d = await r.json();
+          if (!d || !d.Id) return null;
+          const uid = d.Id;
+          const tr = await fetch(
+            `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${uid}&size=150x150&format=Png&isCircular=false`,
+            { mode: "cors" }
+          );
+          if (!tr.ok) throw new Error("Roblox thumbnail failed");
+          const tj = await tr.json();
+          return tj?.data?.[0]?.imageUrl || null;
         } catch (err) {
-          console.warn("fetchRobloxAvatar error", err);
-          fetchMsg.textContent = "No se pudo buscar avatar (CORS o red).";
           return null;
-        } finally {
-          setTimeout(() => (fetchMsg.style.display = "none"), 2200);
         }
+      }
+
+      // Unified avatar fetch: server first, then client fallback
+      async function fetchAvatar(username, { showMessages = true } = {}) {
+        if (!username) return null;
+        if (showMessages) {
+          fetchMsg.style.display = "block";
+          fetchMsg.textContent = "Buscando avatar...";
+        }
+        // try server
+        let url = await getAvatarViaServer(username);
+        if (!url) {
+          // fallback
+          fetchMsg.textContent =
+            "Intentando búsqueda directa (puede fallar por CORS)...";
+          url = await getAvatarViaClientRoblox(username);
+        }
+        if (showMessages) {
+          if (url) {
+            fetchMsg.textContent = "Avatar encontrado";
+          } else {
+            fetchMsg.textContent = "No se pudo obtener avatar";
+          }
+          setTimeout(() => (fetchMsg.style.display = "none"), 1800);
+        }
+        return url;
       }
 
       btnFetch.addEventListener("click", async () => {
@@ -593,58 +658,164 @@
           return;
         }
         headerAvatar.classList.add("loading");
-        const avatarUrl = await fetchRobloxAvatar(username);
+        const avatarUrl = await fetchAvatar(username);
         if (avatarUrl) {
           imgAvatar.src = avatarUrl;
         } else {
-          // fallback friendly avatar
           imgAvatar.src =
             'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="100%" height="100%" fill="%23fef3c7"/><text x="50%" y="55%" font-size="50" text-anchor="middle" fill="%23ff7ab6" dy=".35em">👾</text></svg>';
         }
         headerAvatar.classList.remove("loading");
       });
 
-      btnSave.addEventListener("click", async () => {
-        const username = usernameInput.value.trim() || "demo_kid";
-        headerAvatar.classList.add("loading");
-        const avatarUrl = await fetchRobloxAvatar(username);
-        headerAvatar.classList.remove("loading");
-        // update UI
-        if (avatarUrl) imgAvatar.src = avatarUrl;
-        // save (DEMO) using recopilacion.js - it will store username+avatarUrl locally
-        if (typeof window.recopilacionSaveLogin === "function") {
-          window.recopilacionSaveLogin({
-            username,
-            avatarUrl,
-            timestamp: new Date().toISOString(),
-          });
+      // Register (local demo account) -> POST /api/register
+      btnRegister.addEventListener("click", async () => {
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+        if (!username || password.length < 6) {
+          showAuthMsg("Usuario válido y contraseña >= 6 caracteres", false);
+          return;
         }
-        modal.style.display = "none";
-        alert("Inicio de sesión DEMO guardado localmente.");
+        btnRegister.disabled = true;
+        showAuthMsg("Registrando...", true);
+        try {
+          const res = await fetch("/api/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          const j = await res.json();
+          if (!res.ok) {
+            showAuthMsg(j.error || "Error al registrar", false);
+            btnRegister.disabled = false;
+            return;
+          }
+          // after register, try to fetch avatar and save it to server profile
+          let avatarUrl = await fetchAvatar(username, { showMessages: false });
+          if (avatarUrl) {
+            // save avatar URL in server user profile
+            try {
+              await fetch("/api/me/avatar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ avatarUrl }),
+              });
+            } catch (e) {}
+          }
+          // also store demo login locally and server-side via recopilacionSaveLogin
+          if (typeof window.recopilacionSaveLogin === "function") {
+            window.recopilacionSaveLogin({
+              username,
+              avatarUrl,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          showAuthMsg("Registrado y conectado (demo).", true);
+          modal.style.display = "none";
+          await loadMe();
+        } catch (err) {
+          showAuthMsg("Error de red", false);
+        } finally {
+          btnRegister.disabled = false;
+        }
       });
+
+      // Login -> POST /api/login
+      btnLogin.addEventListener("click", async () => {
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+        if (!username || !password) {
+          showAuthMsg("Completa credenciales", false);
+          return;
+        }
+        btnLogin.disabled = true;
+        showAuthMsg("Iniciando sesión...", true);
+        try {
+          const res = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          const j = await res.json();
+          if (!res.ok) {
+            showAuthMsg(j.error || "Usuario/contraseña inválidos", false);
+            btnLogin.disabled = false;
+            return;
+          }
+          // if server returns no avatarUrl, try to fetch and store it
+          let avatarUrl = j.avatarUrl || "";
+          if (!avatarUrl) {
+            avatarUrl = await fetchAvatar(username, { showMessages: false });
+            if (avatarUrl) {
+              try {
+                await fetch("/api/me/avatar", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ avatarUrl }),
+                });
+              } catch (e) {}
+            }
+          }
+          // save demo login to recopilacion too
+          if (typeof window.recopilacionSaveLogin === "function") {
+            window.recopilacionSaveLogin({
+              username,
+              avatarUrl,
+              timestamp: new Date().toISOString(),
+            });
+          }
+          showAuthMsg("Conectado (demo).", true);
+          modal.style.display = "none";
+          await loadMe();
+        } catch (err) {
+          showAuthMsg("Error de red", false);
+        } finally {
+          btnLogin.disabled = false;
+        }
+      });
+
+      // On load: get current session user from server if available
+      async function loadMe() {
+        try {
+          const r = await fetch("/api/me");
+          const j = await r.json();
+          if (j && j.logged) {
+            if (j.avatarUrl) imgAvatar.src = j.avatarUrl;
+            else
+              imgAvatar.src =
+                'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="150" height="150"><rect width="100%" height="100%" fill="%23fff7ed"/><text x="50%" y="55%" font-size="48" text-anchor="middle" fill="%23ff7ab6" dy=".35em">🙂</text></svg>';
+            openLogin.textContent = "Cuenta: " + j.username;
+            openLogin.classList.remove("btn");
+            openLogin.classList.add("ghost");
+          } else {
+            openLogin.textContent = "Entrar / Registrar";
+            openLogin.classList.remove("ghost");
+            openLogin.classList.add("btn");
+          }
+        } catch (e) {
+          // server not available — keep demo client-only behavior
+        }
+      }
 
       // Reclamar general
       document.getElementById("btnClaim").addEventListener("click", () => {
         animateClaim();
       });
 
-      // On load: if there is a saved login (from recopilacion), show last avatar
+      // Try to show last saved local login avatar if server not available
       (function showLastSaved() {
         if (typeof window.recopilacionGetAll === "function") {
           try {
             const all = window.recopilacionGetAll();
             if (all && all.logins && all.logins.length) {
               const last = all.logins[all.logins.length - 1];
-              if (last && last.avatarUrl) {
-                imgAvatar.src = last.avatarUrl;
-              } else if (last && last.username) {
-                imgAvatar.alt = last.username;
-              }
+              if (last && last.avatarUrl) imgAvatar.src = last.avatarUrl;
+              else if (last && last.username) imgAvatar.alt = last.username;
             }
-          } catch (e) {
-            /*ignore*/
-          }
+          } catch (e) {}
         }
+        // also try server session
+        loadMe();
       })();
     </script>
   </body>
